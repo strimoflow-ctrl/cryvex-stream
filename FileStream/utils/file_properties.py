@@ -10,36 +10,34 @@ from pyrogram.file_id import FileId
 from FileStream.bot import FileStream
 from FileStream.utils.database import Database
 from FileStream.config import Telegram, Server
+from FileStream.server.exceptions import FIleNotFound
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
 
-async def get_file_ids(client: Client | bool, db_id: str, multi_clients, message) -> Optional[FileId]:
+async def get_file_ids(client: Client | bool, db_id: str, multi_clients=None, message=None) -> Optional[FileId]:
     logging.debug("Starting of get_file_ids")
     file_info = await db.get_file(db_id)
+    if not file_info:
+        raise FIleNotFound
 
     if not client:
-        if Telegram.FLOG_CHANNEL:
-            log_msg = await send_file(FileStream, db_id, file_info['file_id'], message)
-            if log_msg:
-                await db.update_file_ids(db_id, await update_file_id(log_msg.id, multi_clients))
+        if Telegram.FLOG_CHANNEL and message and isinstance(message, Message):
+            try:
+                log_msg = await send_file(FileStream, db_id, file_info['file_id'], message)
+                if log_msg:
+                    media = get_media_from_message(log_msg)
+                    if media:
+                        ch_file_id = getattr(media, "file_id", "")
+                        if ch_file_id:
+                            await db.file.update_one({"_id": file_info["_id"]}, {"$set": {"file_id": ch_file_id}})
+            except Exception as e:
+                logging.error(f"Error logging to FLOG_CHANNEL: {e}")
         return
 
     file_id_str = file_info.get("file_id")
-    if Telegram.FLOG_CHANNEL:
-        file_id_info = file_info.setdefault("file_ids", {})
-        if str(client.id) in file_id_info:
-            file_id_str = file_id_info[str(client.id)]
-        elif client.id == FileStream.id:
-            file_id_str = file_info['file_id']
-        else:
-            log_msg = await send_file(FileStream, db_id, file_info['file_id'], message)
-            if log_msg:
-                msg = await client.get_messages(Telegram.FLOG_CHANNEL, log_msg.id)
-                media = get_media_from_message(msg)
-                file_id_str = getattr(media, "file_id", "")
-                file_id_info[str(client.id)] = file_id_str
-                await db.update_file_ids(db_id, file_id_info)
+    if not file_id_str:
+        raise FIleNotFound
 
     file_id = FileId.decode(file_id_str)
     setattr(file_id, "file_size", file_info['file_size'])
@@ -119,19 +117,7 @@ def get_file_info(message):
     }
 
 
-async def update_file_id(msg_id, multi_clients):
-    if not Telegram.FLOG_CHANNEL or not msg_id:
-        return {}
-    file_ids = {}
-    for client_id, client in multi_clients.items():
-        log_msg = await client.get_messages(Telegram.FLOG_CHANNEL, msg_id)
-        media = get_media_from_message(log_msg)
-        file_ids[str(client.id)] = getattr(media, "file_id", "")
-
-    return file_ids
-
-
-async def send_file(client: Client, db_id, file_id: str, message):
+async def send_file(client: Client, db_id, file_id: str, message: Message):
     if not Telegram.FLOG_CHANNEL:
         return None
     file_caption = getattr(message, 'caption', None) or get_name(message)
