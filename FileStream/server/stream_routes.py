@@ -12,6 +12,17 @@ from FileStream import utils, StartTime, __version__
 
 routes = web.RouteTableDef()
 
+@routes.get("/", allow_head=True)
+async def root_path_handler(_):
+    return web.json_response(
+        {
+            "bot_name": "Personal Clean FileStreamBot",
+            "maintained_by": "@cryvex4",
+            "status": "online",
+            "telegram_bot": "@" + FileStream.username
+        }
+    )
+
 @routes.get("/status", allow_head=True)
 async def root_route_handler(_):
     return web.json_response(

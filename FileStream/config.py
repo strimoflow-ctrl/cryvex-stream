@@ -15,6 +15,7 @@ class Telegram:
     SLEEP_THRESHOLD = int(env.get("SLEEP_THRESHOLD", "60"))
     FILE_PIC = env.get('FILE_PIC', "https://graph.org/file/5bb9935be0229adf98b73.jpg")
     START_PIC = env.get('START_PIC', "https://graph.org/file/290af25276fa34fa8f0aa.jpg")
+    FLOG_CHANNEL = int(env.get("FLOG_CHANNEL")) if env.get("FLOG_CHANNEL") else None
     ULOG_CHANNEL = int(env.get("ULOG_CHANNEL")) if env.get("ULOG_CHANNEL") else None
     AUTH_USERS = list(set(int(x) for x in str(env.get("AUTH_USERS", "")).split()))
 
