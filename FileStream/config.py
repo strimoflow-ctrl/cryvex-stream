@@ -30,12 +30,22 @@ class Server:
     PORT = int(env.get("PORT", 8080))
     BIND_ADDRESS = str(env.get("BIND_ADDRESS", "0.0.0.0"))
     PING_INTERVAL = int(env.get("PING_INTERVAL", "1200"))
-    HAS_SSL = str(env.get("HAS_SSL", "0").lower()) in ("1", "true", "t", "yes", "y")
-    NO_PORT = str(env.get("NO_PORT", "0").lower()) in ("1", "true", "t", "yes", "y")
-    FQDN = str(env.get("FQDN", BIND_ADDRESS))
+    
+    _fqdn = str(env.get("FQDN", BIND_ADDRESS)).strip()
+    if _fqdn.startswith("http://"):
+        _fqdn = _fqdn[7:]
+    elif _fqdn.startswith("https://"):
+        _fqdn = _fqdn[8:]
+    _fqdn = _fqdn.rstrip("/")
+
+    HAS_SSL = str(env.get("HAS_SSL", "1" if ("onrender.com" in _fqdn or "railway.app" in _fqdn or "koyeb.app" in _fqdn) else "0").lower()) in ("1", "true", "t", "yes", "y")
+    NO_PORT = str(env.get("NO_PORT", "1" if ("onrender.com" in _fqdn or "railway.app" in _fqdn or "koyeb.app" in _fqdn) else "0").lower()) in ("1", "true", "t", "yes", "y")
+
+    FQDN = _fqdn
     URL = "http{}://{}{}/".format(
         "s" if HAS_SSL else "", FQDN, "" if NO_PORT else ":" + str(PORT)
     )
+
 
 
 
