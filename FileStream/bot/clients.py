@@ -15,9 +15,9 @@ async def initialize_clients():
             )
         )
     )
+    multi_clients[0] = FileStream
+    work_loads[0] = 0
     if not all_tokens:
-        multi_clients[0] = FileStream
-        work_loads[0] = 0
         print("No additional clients found, using default client")
         return
     
@@ -51,8 +51,10 @@ async def initialize_clients():
             logging.error(f"Failed starting Client - {client_id} Error:", exc_info=True)
     
     clients = await asyncio.gather(*[start_client(i, token) for i, token in all_tokens.items()])
-    multi_clients.update(dict(clients))
-    if len(multi_clients) != 1:
+    # filter out None values from failed clients
+    valid_clients = {k: v for k, v in clients if v is not None}
+    multi_clients.update(valid_clients)
+    if len(multi_clients) > 1:
         Telegram.MULTI_CLIENT = True
         print("Multi-Client Mode Enabled")
     else:
