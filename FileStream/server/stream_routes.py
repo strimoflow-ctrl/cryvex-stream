@@ -66,7 +66,25 @@ class_cache = {}
 async def media_streamer(request: web.Request, db_id: str):
     range_header = request.headers.get("Range", 0)
     
-    index = min(work_loads, key=work_loads.get)
+    from FileStream.utils.file_properties import db
+    file_info = await db.get_file(db_id)
+    if not file_info:
+        return web.Response(status=404, text="File not found")
+        
+    file_ids = file_info.get("file_ids", {})
+    valid_client_indices = []
+    
+    # Find which clients actually own a file_id for this file
+    for idx, client in multi_clients.items():
+        if str(client.id) in file_ids:
+            valid_client_indices.append(idx)
+            
+    # If no client specifically owns it, fallback to all clients
+    if not valid_client_indices:
+        valid_client_indices = list(multi_clients.keys())
+        
+    # Pick the least loaded client among the valid ones
+    index = min(valid_client_indices, key=lambda k: work_loads.get(k, 0))
     faster_client = multi_clients[index]
     
     if Telegram.MULTI_CLIENT:
