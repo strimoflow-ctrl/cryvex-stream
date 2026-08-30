@@ -230,8 +230,13 @@ async def stream_handler(request: web.Request):
         raise web.HTTPForbidden(text=e.message)
     except FIleNotFound as e:
         raise web.HTTPNotFound(text=e.message)
-    except (AttributeError, BadStatusLine, ConnectionResetError):
-        pass
+    except (BadStatusLine, ConnectionResetError) as e:
+        logging.warning(f"Client disconnected during watch: {e}")
+        return web.Response(status=499, text="Client Closed Connection")
+    except Exception as e:
+        traceback.print_exc()
+        logging.critical(f"Error in watch handler: {e}")
+        raise web.HTTPInternalServerError(text=str(e))
 
 
 @routes.get("/dl/{path}", allow_head=True)
@@ -243,12 +248,12 @@ async def stream_handler(request: web.Request):
         raise web.HTTPForbidden(text=e.message)
     except FIleNotFound as e:
         raise web.HTTPNotFound(text=e.message)
-    except (AttributeError, BadStatusLine, ConnectionResetError):
-        pass
+    except (BadStatusLine, ConnectionResetError) as e:
+        logging.warning(f"Client disconnected during stream: {e}")
+        return web.Response(status=499, text="Client Closed Connection")
     except Exception as e:
         traceback.print_exc()
-        logging.critical(e.with_traceback(None))
-        logging.debug(traceback.format_exc())
+        logging.critical(f"Error in dl stream handler: {e}")
         raise web.HTTPInternalServerError(text=str(e))
 
 class_cache = {}
@@ -284,8 +289,8 @@ async def media_streamer(request: web.Request, db_id: str):
         logging.debug(f"Creating new ByteStreamer object for client {index}")
         tg_connect = utils.ByteStreamer(faster_client)
         class_cache[faster_client] = tg_connect
-    logging.debug("before calling get_file_properties")
-    file_id = await utils.get_file_properties(faster_client, db_id)
+    logging.debug("before calling get_file_ids")
+    file_id = await utils.get_file_ids(faster_client, db_id, multi_clients, None)
 
     return await tg_connect.yield_file(
         file_id, index, range_header, file_info.get("file_name"), file_info.get("file_size"), file_info.get("mime_type")
