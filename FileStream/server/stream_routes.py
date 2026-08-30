@@ -19,11 +19,25 @@ except ImportError:
 
 routes = web.RouteTableDef()
 
+def human_bytes(b):
+    if not b:
+        return "0 B"
+    if b < 1024:
+        return f"{b} B"
+    elif b < 1024 * 1024:
+        return f"{round(b / 1024, 1)} KB"
+    elif b < 1024 * 1024 * 1024:
+        return f"{round(b / (1024 * 1024), 1)} MB"
+    else:
+        return f"{round(b / (1024 * 1024 * 1024), 2)} GB"
+
 def get_system_metrics():
     cpu_percent = 0
     ram_total_mb = 0
     ram_used_mb = 0
     ram_percent = 0
+    net_sent_bytes = 0
+    net_recv_bytes = 0
 
     if psutil:
         try:
@@ -32,6 +46,10 @@ def get_system_metrics():
             ram_total_mb = round(mem.total / (1024 * 1024))
             ram_used_mb = round(mem.used / (1024 * 1024))
             ram_percent = round(mem.percent)
+            
+            net = psutil.net_io_counters()
+            net_sent_bytes = net.bytes_sent
+            net_recv_bytes = net.bytes_recv
         except Exception:
             pass
     else:
@@ -50,7 +68,9 @@ def get_system_metrics():
         "cpu_percent": cpu_percent,
         "ram_total_mb": ram_total_mb,
         "ram_used_mb": ram_used_mb,
-        "ram_percent": ram_percent
+        "ram_percent": ram_percent,
+        "net_sent": human_bytes(net_sent_bytes),
+        "net_recv": human_bytes(net_recv_bytes)
     }
 
 SERVER_STATS_HTML = """<!DOCTYPE html>
@@ -73,7 +93,7 @@ SERVER_STATS_HTML = """<!DOCTYPE html>
                 <h1 class="text-3xl font-black uppercase tracking-widest text-white flex items-center gap-3">
                     <span class="text-[#FFD700]">⚡ NAINO</span> SERVER MONITOR
                 </h1>
-                <p class="text-gray-400 font-mono text-xs mt-1">REALTIME AWS EC2 & STREAMING METRICS</p>
+                <p class="text-gray-400 font-mono text-xs mt-1">REALTIME AWS EC2 & BANDWIDTH METRICS</p>
             </div>
             <div class="flex items-center gap-2 bg-green-500/10 border border-green-500/30 px-4 py-2 rounded-xl text-green-400 font-mono font-bold text-xs">
                 <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -107,6 +127,27 @@ SERVER_STATS_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Network Bandwidth Section -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-[#111] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-xs font-mono text-gray-400 uppercase tracking-wider">Outbound Bandwidth (Sent)</div>
+                    <span class="text-xs font-mono text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-0.5 rounded">Egress</span>
+                </div>
+                <div class="text-3xl font-black text-green-400" id="net-sent">--</div>
+                <p class="text-xs font-mono text-gray-500 mt-2">Total Outgoing Data Transferred</p>
+            </div>
+
+            <div class="bg-[#111] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-xs font-mono text-gray-400 uppercase tracking-wider">Inbound Bandwidth (Received)</div>
+                    <span class="text-xs font-mono text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded">Ingress</span>
+                </div>
+                <div class="text-3xl font-black text-blue-400" id="net-recv">--</div>
+                <p class="text-xs font-mono text-gray-500 mt-2">Total Incoming Data Received</p>
+            </div>
+        </div>
+
         <div class="bg-[#111] border border-white/10 rounded-2xl p-6">
             <h3 class="text-lg font-bold text-white mb-4">Connected Stream Bots</h3>
             <div id="bots-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -129,6 +170,9 @@ SERVER_STATS_HTML = """<!DOCTYPE html>
                 document.getElementById('cpu-bar').style.width = `${data.metrics.cpu_percent}%`;
 
                 document.getElementById('uptime-text').innerText = data.uptime;
+
+                document.getElementById('net-sent').innerText = data.metrics.net_sent || '0 B';
+                document.getElementById('net-recv').innerText = data.metrics.net_recv || '0 B';
 
                 const botList = document.getElementById('bots-list');
                 botList.innerHTML = Object.entries(data.loads).map(([bot, load]) => `
@@ -157,7 +201,6 @@ SERVER_STATS_HTML = """<!DOCTYPE html>
 async def root_route_handler(request: web.Request):
     metrics = get_system_metrics()
     
-    # If user visits in browser (and not json query), render HTML page
     if "text/html" in request.headers.get("Accept", "") and request.query.get("json") != "1":
         return web.Response(text=SERVER_STATS_HTML, content_type='text/html')
 
