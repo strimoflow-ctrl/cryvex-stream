@@ -3,6 +3,7 @@ import math
 import logging
 import mimetypes
 import traceback
+import os
 from aiohttp import web
 from aiohttp.http_exceptions import BadStatusLine
 from FileStream.bot import multi_clients, work_loads, FileStream
@@ -11,10 +12,155 @@ from FileStream.server.exceptions import FIleNotFound, InvalidHash
 from FileStream import utils, StartTime, __version__
 from FileStream.utils.render_template import render_page
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 routes = web.RouteTableDef()
 
+def get_system_metrics():
+    cpu_percent = 0
+    ram_total_mb = 0
+    ram_used_mb = 0
+    ram_percent = 0
+
+    if psutil:
+        try:
+            cpu_percent = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            ram_total_mb = round(mem.total / (1024 * 1024))
+            ram_used_mb = round(mem.used / (1024 * 1024))
+            ram_percent = round(mem.percent)
+        except Exception:
+            pass
+    else:
+        try:
+            with open('/proc/meminfo') as f:
+                lines = f.readlines()
+            total_kb = int([l for l in lines if 'MemTotal' in l][0].split()[1])
+            avail_kb = int([l for l in lines if 'MemAvailable' in l][0].split()[1])
+            ram_total_mb = round(total_kb / 1024)
+            ram_used_mb = round((total_kb - avail_kb) / 1024)
+            ram_percent = round((ram_used_mb / ram_total_mb) * 100) if ram_total_mb else 0
+        except Exception:
+            pass
+
+    return {
+        "cpu_percent": cpu_percent,
+        "ram_total_mb": ram_total_mb,
+        "ram_used_mb": ram_used_mb,
+        "ram_percent": ram_percent
+    }
+
+SERVER_STATS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Naino Server Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Outfit', sans-serif; background-color: #050505; color: #fff; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body class="min-h-screen p-6 md:p-12 flex flex-col items-center justify-center">
+    <div class="w-full max-w-4xl space-y-6">
+        <div class="flex items-center justify-between border-b border-white/10 pb-6">
+            <div>
+                <h1 class="text-3xl font-black uppercase tracking-widest text-white flex items-center gap-3">
+                    <span class="text-[#FFD700]">⚡ NAINO</span> SERVER MONITOR
+                </h1>
+                <p class="text-gray-400 font-mono text-xs mt-1">REALTIME AWS EC2 & STREAMING METRICS</p>
+            </div>
+            <div class="flex items-center gap-2 bg-green-500/10 border border-green-500/30 px-4 py-2 rounded-xl text-green-400 font-mono font-bold text-xs">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                SYSTEM ONLINE
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="bg-[#111] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
+                <div class="text-xs font-mono text-gray-400 uppercase tracking-wider mb-2">RAM Usage</div>
+                <div class="text-3xl font-black text-white" id="ram-text">-- MB</div>
+                <div class="w-full bg-white/10 h-2 rounded-full mt-4 overflow-hidden">
+                    <div id="ram-bar" class="h-full bg-[#FFD700] rounded-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                <p class="text-xs font-mono text-gray-500 mt-2" id="ram-sub">Loading RAM metrics...</p>
+            </div>
+
+            <div class="bg-[#111] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
+                <div class="text-xs font-mono text-gray-400 uppercase tracking-wider mb-2">CPU Load</div>
+                <div class="text-3xl font-black text-white" id="cpu-text">-- %</div>
+                <div class="w-full bg-white/10 h-2 rounded-full mt-4 overflow-hidden">
+                    <div id="cpu-bar" class="h-full bg-blue-500 rounded-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                <p class="text-xs font-mono text-gray-500 mt-2">Active Multi-Core CPU</p>
+            </div>
+
+            <div class="bg-[#111] border border-white/10 rounded-2xl p-6 relative overflow-hidden">
+                <div class="text-xs font-mono text-gray-400 uppercase tracking-wider mb-2">Server Uptime</div>
+                <div class="text-3xl font-black text-[#FFD700]" id="uptime-text">--</div>
+                <p class="text-xs font-mono text-gray-500 mt-4">Pyrogram Engine Uptime</p>
+            </div>
+        </div>
+
+        <div class="bg-[#111] border border-white/10 rounded-2xl p-6">
+            <h3 class="text-lg font-bold text-white mb-4">Connected Stream Bots</h3>
+            <div id="bots-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="p-4 bg-black border border-white/10 rounded-xl text-gray-400 font-mono text-xs">Loading bot instances...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function updateStats() {
+            try {
+                const res = await fetch('/status?json=1');
+                const data = await res.json();
+                
+                document.getElementById('ram-text').innerText = `${data.metrics.ram_used_mb} MB`;
+                document.getElementById('ram-sub').innerText = `${data.metrics.ram_used_mb} MB / ${data.metrics.ram_total_mb} MB (${data.metrics.ram_percent}%)`;
+                document.getElementById('ram-bar').style.width = `${data.metrics.ram_percent}%`;
+
+                document.getElementById('cpu-text').innerText = `${data.metrics.cpu_percent}%`;
+                document.getElementById('cpu-bar').style.width = `${data.metrics.cpu_percent}%`;
+
+                document.getElementById('uptime-text').innerText = data.uptime;
+
+                const botList = document.getElementById('bots-list');
+                botList.innerHTML = Object.entries(data.loads).map(([bot, load]) => `
+                    <div class="p-4 bg-black border border-white/10 rounded-xl flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-white text-sm">${bot.toUpperCase()} (${data.telegram_bot})</div>
+                            <div class="text-xs font-mono text-gray-500">Connected & Serving Streams</div>
+                        </div>
+                        <div class="px-3 py-1 bg-[#FFD700]/10 text-[#FFD700] border border-[#FFD700]/20 rounded-lg text-xs font-mono font-bold">
+                            Load: ${load}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        updateStats();
+        setInterval(updateStats, 3000);
+    </script>
+</body>
+</html>"""
+
 @routes.get("/status", allow_head=True)
-async def root_route_handler(_):
+@routes.get("/server-stats", allow_head=True)
+async def root_route_handler(request: web.Request):
+    metrics = get_system_metrics()
+    
+    # If user visits in browser (and not json query), render HTML page
+    if "text/html" in request.headers.get("Accept", "") and request.query.get("json") != "1":
+        return web.Response(text=SERVER_STATS_HTML, content_type='text/html')
+
     return web.json_response(
         {
             "server_status": "running",
@@ -27,6 +173,7 @@ async def root_route_handler(_):
                     sorted(work_loads.items(), key=lambda x: x[1], reverse=True)
                 )
             ),
+            "metrics": metrics,
             "version": __version__,
         }
     )
@@ -74,16 +221,13 @@ async def media_streamer(request: web.Request, db_id: str):
     file_ids = file_info.get("file_ids", {})
     valid_client_indices = []
     
-    # Find which clients actually own a file_id for this file
     for idx, client in multi_clients.items():
         if str(client.id) in file_ids:
             valid_client_indices.append(idx)
             
-    # If no client specifically owns it, fallback to all clients
     if not valid_client_indices:
         valid_client_indices = list(multi_clients.keys())
         
-    # Pick the least loaded client among the valid ones
     index = min(valid_client_indices, key=lambda k: work_loads.get(k, 0))
     faster_client = multi_clients[index]
     
@@ -98,57 +242,8 @@ async def media_streamer(request: web.Request, db_id: str):
         tg_connect = utils.ByteStreamer(faster_client)
         class_cache[faster_client] = tg_connect
     logging.debug("before calling get_file_properties")
-    file_id = await tg_connect.get_file_properties(db_id, multi_clients)
-    logging.debug("after calling get_file_properties")
-    
-    file_size = file_id.file_size
+    file_id = await utils.get_file_properties(faster_client, db_id)
 
-    if range_header:
-        from_bytes, until_bytes = range_header.replace("bytes=", "").split("-")
-        from_bytes = int(from_bytes)
-        until_bytes = int(until_bytes) if until_bytes else file_size - 1
-    else:
-        from_bytes = request.http_range.start or 0
-        until_bytes = (request.http_range.stop or file_size) - 1
-
-    if (until_bytes > file_size) or (from_bytes < 0) or (until_bytes < from_bytes):
-        return web.Response(
-            status=416,
-            body="416: Range not satisfiable",
-            headers={"Content-Range": f"bytes */{file_size}"},
-        )
-
-    chunk_size = 1024 * 1024
-    until_bytes = min(until_bytes, file_size - 1)
-
-    offset = from_bytes - (from_bytes % chunk_size)
-    first_part_cut = from_bytes - offset
-    last_part_cut = until_bytes % chunk_size + 1
-
-    req_length = until_bytes - from_bytes + 1
-    part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
-    body = tg_connect.yield_file(
-        file_id, index, offset, first_part_cut, last_part_cut, part_count, chunk_size
-    )
-
-    mime_type = file_id.mime_type
-    file_name = utils.get_name(file_id)
-    disposition = "attachment"
-
-    if not mime_type:
-        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
-
-    # if "video/" in mime_type or "audio/" in mime_type:
-    #     disposition = "inline"
-
-    return web.Response(
-        status=206 if range_header else 200,
-        body=body,
-        headers={
-            "Content-Type": f"{mime_type}",
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition}; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-        },
+    return await tg_connect.yield_file(
+        file_id, index, range_header, file_info.get("file_name"), file_info.get("file_size"), file_info.get("mime_type")
     )
