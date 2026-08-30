@@ -126,3 +126,7 @@ streambot.log.*
 *.xml
 *.xml
 .idea/workspace.xml
+
+3+api.txt
+*.env
+*.txt

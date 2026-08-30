@@ -9,6 +9,10 @@ from pyrogram import filters, Client
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums.parse_mode import ParseMode
+from FileStream.utils.groq_parser import parse_lecture_info
+from FileStream.utils.firebase_db import push_pending_upload
+from FileStream.config import Server
+
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
 @FileStream.on_message(
@@ -35,9 +39,32 @@ async def private_receive_handler(bot: Client, message: Message):
         if not await is_user_joined(bot, message):
             return
     try:
-        inserted_id = await db.add_file(get_file_info(message))
+        file_info_obj = get_file_info(message)
+        inserted_id = await db.add_file(file_info_obj)
         await get_file_ids(False, inserted_id, multi_clients, message)
         reply_markup, stream_text = await gen_link(_id=inserted_id)
+
+        # Parse title and lecture number using Groq AI / Regex
+        raw_text = message.caption or file_info_obj.get('file_name', 'Untitled')
+        parsed = await parse_lecture_info(raw_text)
+        
+        # Build stream link & push to Firebase inbox
+        stream_link = f"{Server.URL}dl/{inserted_id}"
+        file_name = file_info_obj.get('file_name', 'File')
+        file_size = str(file_info_obj.get('file_size', 0))
+
+        pushed = await push_pending_upload(
+            file_id=str(inserted_id),
+            title=parsed['title'],
+            lecture_no=parsed['lecture_no'],
+            stream_link=stream_link,
+            file_name=file_name,
+            file_size=file_size
+        )
+
+        if pushed:
+            stream_text += f"\n\n<b>📥 Sent to Admin Inbox!</b>\n<b>Title:</b> {parsed['title']}\n<b>Lec #:</b> {parsed['lecture_no'] if parsed['lecture_no'] != 999 else 'Auto'}"
+
         await message.reply_text(
             text=stream_text,
             parse_mode=ParseMode.HTML,

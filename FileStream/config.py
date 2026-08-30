@@ -25,6 +25,12 @@ class Telegram:
     MODE = env.get("MODE", "primary")
     SECONDARY = True if MODE.lower() == "secondary" else False
     AUTH_USERS = list(set(int(x) for x in str(env.get("AUTH_USERS", "")).split()))
+    GROQ_API_KEYS = [
+        env.get("GROQ_API_KEY_1", ""),
+        env.get("GROQ_API_KEY_2", ""),
+        env.get("GROQ_API_KEY_3", "")
+    ]
+    FIREBASE_DATABASE_URL = env.get("FIREBASE_DATABASE_URL", "https://nainoacademy-50f09-default-rtdb.firebaseio.com")
 
 class Server:
     PORT = int(env.get("PORT", 8080))
