@@ -1,8 +1,10 @@
 
+import base64
+import aiohttp
 from FileStream.bot import FileStream, multi_clients
 from FileStream.utils.bot_utils import is_user_banned, is_user_exist, is_user_joined, gen_link, is_channel_banned, is_channel_exist, is_user_authorized
 from FileStream.utils.database import Database
-from FileStream.utils.file_properties import get_file_ids, get_file_info, get_thumb_info
+from FileStream.utils.file_properties import get_file_ids, get_file_info
 from FileStream.config import Telegram
 from pyrogram import filters, Client
 from pyrogram.errors import FloodWait
@@ -14,19 +16,57 @@ from FileStream.config import Server
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
-async def get_self_hosted_thumb_url(message: Message) -> str:
+# 5 User ImgBB API Keys with Automatic Failover Rotation
+IMGBB_API_KEYS = [
+    "afc77b68f6c5ae56c42a5b225ef54635",
+    "5b7d3b1d031d9d2c7bfc29b59e07987f",
+    "d096ed6d78c97436376467bc7ac19f6c",
+    "209f45ba726aa6080111cac04ddd61f8",
+    "39469af0165ceced8495586e27f55db6"
+]
+
+async def upload_thumb_with_key_rotation(bot: Client, message: Message) -> str:
     """
-    Registers Telegram video thumbnail into database and returns self-hosted stream URL (https://nainoacademy.online/dl/{thumb_inserted_id}).
-    100% Self-Hosted, NO third party API, NO API keys, 0% rate limit!
+    Downloads video thumbnail from Telegram and uploads to ImgBB.
+    Tries each of the 5 API keys sequentially. If one key hits its limit or fails,
+    it automatically switches to the next working key!
     """
     try:
-        thumb_info_obj = get_thumb_info(message)
-        if thumb_info_obj:
-            thumb_inserted_id = await db.add_file(thumb_info_obj)
-            await get_file_ids(False, thumb_inserted_id, multi_clients, message)
-            return f"{Server.URL}dl/{thumb_inserted_id}"
+        media = getattr(message, 'video', None) or getattr(message, 'document', None) or getattr(message, 'photo', None)
+        if not media:
+            return ""
+
+        thumbs = getattr(media, 'thumbs', None)
+        if not thumbs or not isinstance(thumbs, list):
+            return ""
+
+        thumb_file_id = thumbs[-1].file_id
+        if not thumb_file_id:
+            return ""
+
+        thumb_bytes = await bot.download_media(thumb_file_id, in_memory=True)
+        if not thumb_bytes:
+            return ""
+
+        b64_data = base64.b64encode(bytes(thumb_bytes.getbuffer())).decode('utf-8')
+
+        async with aiohttp.ClientSession() as session:
+            for idx, api_key in enumerate(IMGBB_API_KEYS, 1):
+                try:
+                    data = aiohttp.FormData()
+                    data.add_field('key', api_key)
+                    data.add_field('image', b64_data)
+                    async with session.post('https://api.imgbb.com/1/upload', data=data, timeout=10) as resp:
+                        res_json = await resp.json()
+                        if res_json.get('success') and 'data' in res_json and 'url' in res_json['data']:
+                            print(f"[ImgBB Success] Uploaded thumbnail using Key #{idx} ({api_key[:8]}...) -> {res_json['data']['url']}")
+                            return res_json['data']['url']
+                        else:
+                            print(f"[ImgBB Key #{idx} Failed] Trying next key... Response: {res_json}")
+                except Exception as key_err:
+                    print(f"[ImgBB Key #{idx} Error] {key_err}. Trying next key...")
     except Exception as e:
-        print(f"Error registering self-hosted thumbnail: {e}")
+        print(f"Error uploading thumbnail with key rotation: {e}")
     return ""
 
 @FileStream.on_message(
@@ -63,8 +103,8 @@ async def private_receive_handler(bot: Client, message: Message):
         raw_text = raw_caption or file_info_obj.get('file_name', 'Untitled')
         parsed = await parse_lecture_info(raw_text)
         
-        # Self-hosted thumbnail URL via server (100% self-hosted, 0 third party APIs, 0 API keys)
-        thumb_url = await get_self_hosted_thumb_url(message)
+        # Upload video thumbnail to ImgBB using 5-key automatic rotation engine
+        thumb_url = await upload_thumb_with_key_rotation(bot, message)
 
         # Build stream link & push to Firebase inbox
         stream_link = f"{Server.URL}dl/{inserted_id}"
