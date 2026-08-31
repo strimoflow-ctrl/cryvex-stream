@@ -1,10 +1,8 @@
 
-import base64
-import aiohttp
 from FileStream.bot import FileStream, multi_clients
 from FileStream.utils.bot_utils import is_user_banned, is_user_exist, is_user_joined, gen_link, is_channel_banned, is_channel_exist, is_user_authorized
 from FileStream.utils.database import Database
-from FileStream.utils.file_properties import get_file_ids, get_file_info
+from FileStream.utils.file_properties import get_file_ids, get_file_info, get_thumb_info
 from FileStream.config import Telegram
 from pyrogram import filters, Client
 from pyrogram.errors import FloodWait
@@ -16,37 +14,19 @@ from FileStream.config import Server
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
-async def upload_thumb_to_telegraph(bot: Client, message: Message) -> str:
+async def get_self_hosted_thumb_url(message: Message) -> str:
     """
-    Uploads video thumbnail to Telegraph (https://telegra.ph/upload).
-    100% Free, Public, and REQUIRES NO API KEY. Zero impact on user API limits!
+    Registers Telegram video thumbnail into database and returns self-hosted stream URL (https://nainoacademy.online/dl/{thumb_inserted_id}).
+    100% Self-Hosted, NO third party API, NO API keys, 0% rate limit!
     """
     try:
-        media = getattr(message, 'video', None) or getattr(message, 'document', None) or getattr(message, 'photo', None)
-        if not media:
-            return ""
-
-        thumbs = getattr(media, 'thumbs', None)
-        if not thumbs or not isinstance(thumbs, list):
-            return ""
-
-        thumb_file_id = thumbs[-1].file_id
-        if not thumb_file_id:
-            return ""
-
-        thumb_bytes = await bot.download_media(thumb_file_id, in_memory=True)
-        if not thumb_bytes:
-            return ""
-
-        async with aiohttp.ClientSession() as session:
-            data = aiohttp.FormData()
-            data.add_field('file', thumb_bytes.getbuffer(), filename='thumb.jpg', content_type='image/jpeg')
-            async with session.post('https://telegra.ph/upload', data=data, timeout=10) as resp:
-                res_json = await resp.json()
-                if isinstance(res_json, list) and len(res_json) > 0 and 'src' in res_json[0]:
-                    return f"https://telegra.ph{res_json[0]['src']}"
+        thumb_info_obj = get_thumb_info(message)
+        if thumb_info_obj:
+            thumb_inserted_id = await db.add_file(thumb_info_obj)
+            await get_file_ids(False, thumb_inserted_id, multi_clients, message)
+            return f"{Server.URL}dl/{thumb_inserted_id}"
     except Exception as e:
-        print(f"Error uploading thumbnail to Telegraph: {e}")
+        print(f"Error registering self-hosted thumbnail: {e}")
     return ""
 
 @FileStream.on_message(
@@ -83,8 +63,8 @@ async def private_receive_handler(bot: Client, message: Message):
         raw_text = raw_caption or file_info_obj.get('file_name', 'Untitled')
         parsed = await parse_lecture_info(raw_text)
         
-        # Upload video thumbnail to Telegraph (100% Free Public API, No key needed)
-        thumb_url = await upload_thumb_to_telegraph(bot, message)
+        # Self-hosted thumbnail URL via server (100% self-hosted, 0 third party APIs, 0 API keys)
+        thumb_url = await get_self_hosted_thumb_url(message)
 
         # Build stream link & push to Firebase inbox
         stream_link = f"{Server.URL}dl/{inserted_id}"

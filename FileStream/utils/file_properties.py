@@ -133,6 +133,28 @@ def get_file_info(message):
     }
 
 
+def get_thumb_info(message):
+    media = get_media_from_message(message)
+    if not media:
+        return None
+    thumbs = getattr(media, 'thumbs', None)
+    if not thumbs or not isinstance(thumbs, list):
+        return None
+    thumb = thumbs[-1]
+    if message.chat.type == ChatType.PRIVATE:
+        user_idx = message.from_user.id
+    else:
+        user_idx = message.chat.id
+    return {
+        "user_id": user_idx,
+        "file_id": getattr(thumb, "file_id", ""),
+        "file_unique_id": getattr(thumb, "file_unique_id", ""),
+        "file_name": f"thumb-{getattr(thumb, 'file_unique_id', 'img')}.jpg",
+        "file_size": getattr(thumb, "file_size", 0),
+        "mime_type": "image/jpeg"
+    }
+
+
 async def update_file_id(msg_id, multi_clients):
     file_ids = {}
     for client_id, client in multi_clients.items():
