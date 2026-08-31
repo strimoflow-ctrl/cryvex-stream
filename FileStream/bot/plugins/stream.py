@@ -16,9 +16,11 @@ from FileStream.config import Server
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
-IMGBB_API_KEY = "094a8a844c0cd7a605f4dff298b162d0"
-
-async def upload_thumb_to_imgbb(bot: Client, message: Message) -> str:
+async def upload_thumb_to_telegraph(bot: Client, message: Message) -> str:
+    """
+    Uploads video thumbnail to Telegraph (https://telegra.ph/upload).
+    100% Free, Public, and REQUIRES NO API KEY. Zero impact on user API limits!
+    """
     try:
         media = getattr(message, 'video', None) or getattr(message, 'document', None) or getattr(message, 'photo', None)
         if not media:
@@ -36,18 +38,15 @@ async def upload_thumb_to_imgbb(bot: Client, message: Message) -> str:
         if not thumb_bytes:
             return ""
 
-        b64_data = base64.b64encode(bytes(thumb_bytes.getbuffer())).decode('utf-8')
-
         async with aiohttp.ClientSession() as session:
             data = aiohttp.FormData()
-            data.add_field('key', IMGBB_API_KEY)
-            data.add_field('image', b64_data)
-            async with session.post('https://api.imgbb.com/1/upload', data=data, timeout=10) as resp:
+            data.add_field('file', thumb_bytes.getbuffer(), filename='thumb.jpg', content_type='image/jpeg')
+            async with session.post('https://telegra.ph/upload', data=data, timeout=10) as resp:
                 res_json = await resp.json()
-                if res_json.get('success'):
-                    return res_json['data']['url']
+                if isinstance(res_json, list) and len(res_json) > 0 and 'src' in res_json[0]:
+                    return f"https://telegra.ph{res_json[0]['src']}"
     except Exception as e:
-        print(f"Error uploading thumbnail to ImgBB: {e}")
+        print(f"Error uploading thumbnail to Telegraph: {e}")
     return ""
 
 @FileStream.on_message(
@@ -84,8 +83,8 @@ async def private_receive_handler(bot: Client, message: Message):
         raw_text = raw_caption or file_info_obj.get('file_name', 'Untitled')
         parsed = await parse_lecture_info(raw_text)
         
-        # Upload video thumbnail to ImgBB if available
-        thumb_url = await upload_thumb_to_imgbb(bot, message)
+        # Upload video thumbnail to Telegraph (100% Free Public API, No key needed)
+        thumb_url = await upload_thumb_to_telegraph(bot, message)
 
         # Build stream link & push to Firebase inbox
         stream_link = f"{Server.URL}dl/{inserted_id}"
