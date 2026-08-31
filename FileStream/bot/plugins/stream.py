@@ -1,5 +1,6 @@
 
-import asyncio
+import base64
+import aiohttp
 from FileStream.bot import FileStream, multi_clients
 from FileStream.utils.bot_utils import is_user_banned, is_user_exist, is_user_joined, gen_link, is_channel_banned, is_channel_exist, is_user_authorized
 from FileStream.utils.database import Database
@@ -14,6 +15,40 @@ from FileStream.utils.firebase_db import push_pending_upload
 from FileStream.config import Server
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
+
+IMGBB_API_KEY = "094a8a844c0cd7a605f4dff298b162d0"
+
+async def upload_thumb_to_imgbb(bot: Client, message: Message) -> str:
+    try:
+        media = getattr(message, 'video', None) or getattr(message, 'document', None) or getattr(message, 'photo', None)
+        if not media:
+            return ""
+
+        thumbs = getattr(media, 'thumbs', None)
+        if not thumbs or not isinstance(thumbs, list):
+            return ""
+
+        thumb_file_id = thumbs[-1].file_id
+        if not thumb_file_id:
+            return ""
+
+        thumb_bytes = await bot.download_media(thumb_file_id, in_memory=True)
+        if not thumb_bytes:
+            return ""
+
+        b64_data = base64.b64encode(bytes(thumb_bytes.getbuffer())).decode('utf-8')
+
+        async with aiohttp.ClientSession() as session:
+            data = aiohttp.FormData()
+            data.add_field('key', IMGBB_API_KEY)
+            data.add_field('image', b64_data)
+            async with session.post('https://api.imgbb.com/1/upload', data=data, timeout=10) as resp:
+                res_json = await resp.json()
+                if res_json.get('success'):
+                    return res_json['data']['url']
+    except Exception as e:
+        print(f"Error uploading thumbnail to ImgBB: {e}")
+    return ""
 
 @FileStream.on_message(
     filters.private
@@ -44,10 +79,14 @@ async def private_receive_handler(bot: Client, message: Message):
         await get_file_ids(False, inserted_id, multi_clients, message)
         reply_markup, stream_text = await gen_link(_id=inserted_id)
 
-        # Parse title and lecture number using Groq AI / Regex
-        raw_text = message.caption or file_info_obj.get('file_name', 'Untitled')
+        # Extract raw caption sent by user
+        raw_caption = message.caption or message.text or ""
+        raw_text = raw_caption or file_info_obj.get('file_name', 'Untitled')
         parsed = await parse_lecture_info(raw_text)
         
+        # Upload video thumbnail to ImgBB if available
+        thumb_url = await upload_thumb_to_imgbb(bot, message)
+
         # Build stream link & push to Firebase inbox
         stream_link = f"{Server.URL}dl/{inserted_id}"
         file_name = file_info_obj.get('file_name', 'File')
@@ -59,7 +98,9 @@ async def private_receive_handler(bot: Client, message: Message):
             lecture_no=parsed['lecture_no'],
             stream_link=stream_link,
             file_name=file_name,
-            file_size=file_size
+            file_size=file_size,
+            raw_caption=raw_caption,
+            thumb_url=thumb_url
         )
 
         if pushed:

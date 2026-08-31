@@ -4,7 +4,16 @@ import urllib.request
 import urllib.error
 from FileStream.config import Telegram
 
-async def push_pending_upload(file_id: str, title: str, lecture_no: int, stream_link: str, file_name: str, file_size: str):
+async def push_pending_upload(
+    file_id: str,
+    title: str,
+    lecture_no: int,
+    stream_link: str,
+    file_name: str,
+    file_size: str,
+    raw_caption: str = "",
+    thumb_url: str = ""
+):
     """
     Pushes a processed video item to Firebase Realtime DB under /pending_uploads
     """
@@ -22,6 +31,8 @@ async def push_pending_upload(file_id: str, title: str, lecture_no: int, stream_
         "stream_link": stream_link,
         "file_name": file_name,
         "file_size": file_size,
+        "raw_caption": raw_caption,
+        "thumb_url": thumb_url,
         "timestamp": int(time.time() * 1000)
     }
 
